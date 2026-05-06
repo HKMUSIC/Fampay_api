@@ -7,7 +7,7 @@ app.use(cors());
 app.use(express.static('public'));
 app.use(express.json());
 
-// Serve HTML
+// Explicitly serve the HTML file from the 'public' folder on the root route
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -22,65 +22,60 @@ app.post('/create-api', (req, res) => {
   }
 
   const apiKey = "GMS" + Math.random().toString(36).substring(2, 15).toUpperCase();
-  users[apiKey] = { gmail, appPass, upi, orders: {} };
+  
+  users[apiKey] = { gmail, appPass, upi }; // Orders hata diya kyunki ab direct UTR se check hoga
 
-  res.json({ status: "success", apiKey, message: "API Created Successfully" });
+  res.json({ 
+    status: "success", 
+    apiKey,
+    message: "API Created Successfully"
+  });
 });
 
-// Generate QR
+// Generate QR (Ab sirf UPI ID aur Amount return karega)
 app.get('/api/qr', (req, res) => {
   const apiKey = req.query.api;
   const amount = parseInt(req.query.amount) || 10;
 
-  if (!users[apiKey]) return res.json({ status: "error", message: "Invalid API Key" });
-
-  const orderId = "FAMPAY" + Date.now();
-  users[apiKey].orders[orderId] = { status: "pending", amount };
+  if (!users[apiKey]) {
+    return res.json({ status: "error", message: "API Key Expire ho gayi hai! Website par jaakar nayi banayein." });
+  }
 
   res.json({
     status: "success",
     data: {
-      order_id: orderId,
-      qr_url: `https://api.gms.site/qr/${orderId}.png`,
       upi_id: users[apiKey].upi,
-      amount: amount,
-      created_at_ist: new Date().toLocaleString('en-IN'),
-      expires_at_ist: new Date(Date.now() + 5*60000).toLocaleString('en-IN')
+      amount: amount
     }
   });
 });
 
-// Real Verify with IMAP
+// NAYA: Real Verify with IMAP using UTR/Transaction ID
 app.get('/api/verify', async (req, res) => {
   const apiKey = req.query.api_key;
-  const orderId = req.query.order_id;
+  const txnId = req.query.txn_id; // Frontend/Bot ab txn_id bhejega
 
-  if (!users[apiKey]) return res.json({ status: "error", message: "Invalid API Key" });
+  if (!users[apiKey]) {
+    return res.json({ status: "error", message: "API Key Expire ho gayi hai!" });
+  }
+  if (!txnId) {
+    return res.json({ status: "error", message: "Transaction ID is required" });
+  }
 
   const user = users[apiKey];
-  const expectedAmount = user.orders[orderId]?.amount || 10; // Amount nikala
 
   try {
-    // Ab checkPaymentInEmail mein OrderID ki jagah Expected Amount bhej rahe hain
-    const result = await checkPaymentInEmail(user.gmail, user.appPass, expectedAmount);
+    const result = await checkPaymentInEmail(user.gmail, user.appPass, txnId);
     
     if (result.status === "success") {
       res.json({
         status: "success",
-        data: {
-          order_id: orderId,
-          transaction_id: result.transaction_id,
-          amount: expectedAmount,
-          utr: result.utr,
-          sender_name: result.sender,
-          payment_time_ist: new Date().toLocaleString('en-IN')
-        }
+        data: result.data
       });
     } else {
       res.json({
         status: "pending",
-        message: "Payment verification in progress",
-        order_id: orderId
+        message: "Payment not found or email is already read"
       });
     }
   } catch (err) {
@@ -88,8 +83,8 @@ app.get('/api/verify', async (req, res) => {
   }
 });
 
-// 🚀 ADVANCED IMAP FUNCTION (Based on your FamPay Email Screenshot)
-async function checkPaymentInEmail(email, appPassword, expectedAmount) {
+// NAYA IMAP Function: Direct UTR/Txn ID Search
+async function checkPaymentInEmail(email, appPassword, txnId) {
   const imap = require('imap');
   const { simpleParser } = require('mailparser');
   const Imap = imap;
@@ -105,11 +100,13 @@ async function checkPaymentInEmail(email, appPassword, expectedAmount) {
     });
 
     client.once('ready', () => {
-      client.openBox('INBOX', true, (err, box) => { // true = read-only mode
+      client.openBox('INBOX', true, (err, box) => {
         if (err) return resolve({ status: "pending" });
 
-        // 'successfully received' keyword search kar rahe hain email mein
-        client.search(['UNSEEN', ['TEXT', 'successfully']], (err, results) => {
+        // Email mein exactly user ka bheja hua Transaction ID/UTR dhoondhega
+        const searchCriteria = ['UNSEEN', ['TEXT', txnId]];
+        
+        client.search(searchCriteria, (err, results) => {
           if (err || !results || results.length === 0) {
             client.end();
             return resolve({ status: "pending" });
@@ -133,25 +130,21 @@ async function checkPaymentInEmail(email, appPassword, expectedAmount) {
             let paymentFound = false;
 
             for (let text of emailsText) {
-              // Regex checking based on FamPay UI text
-              const amountMatch = text.match(/₹\s*([0-9]+(?:\.[0-9]+)?)/);
-              let receivedAmount = amountMatch ? parseFloat(amountMatch[1]) : 0;
-
-              // Check if email says successfully received and amount matches
-              if (text.includes("successfully received") && receivedAmount === parseFloat(expectedAmount)) {
+              if (text.includes(txnId)) {
                 paymentFound = true;
                 
-                // Screenshot wale format se data nikalna
-                const utrMatch = text.match(/UTR\s*[:\r\n\s]*([0-9]{10,})/i);
-                const txnMatch = text.match(/Transaction ID\s*[:\r\n\s]*([A-Z0-9]+)/i);
+                // Screenshot wale format se Amount aur Sender ka naam nikalna
+                const amountMatch = text.match(/₹\s*([0-9]+(?:\.[0-9]+)?)/);
                 const senderMatch = text.match(/from\s+([A-Za-z\s]+)/i);
 
                 client.end();
                 return resolve({
                   status: "success",
-                  utr: utrMatch ? utrMatch[1] : "Not Found",
-                  transaction_id: txnMatch ? txnMatch[1] : "FMPIB" + Date.now(),
-                  sender: senderMatch ? senderMatch[1].trim() : "Unknown"
+                  data: {
+                    utr_or_txn: txnId,
+                    amount: amountMatch ? parseFloat(amountMatch[1]) : 0,
+                    sender: senderMatch ? senderMatch[1].trim() : "Unknown",
+                  }
                 });
               }
             }
@@ -170,9 +163,8 @@ async function checkPaymentInEmail(email, appPassword, expectedAmount) {
   });
 }
 
-// FIX FOR HEROKU
+// FIX FOR HEROKU: Yeh server ko bina kisi condition ke lagatar chalne dega
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`GMS FamPay API running on port ${PORT}`);
 });
-

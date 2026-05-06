@@ -7,9 +7,9 @@ app.use(cors());
 app.use(express.static('public'));
 app.use(express.json());
 
-// FIX: Explicitly serve the HTML file on the root route
+// FIX: Explicitly serve the HTML file from the 'public' folder on the root route
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 let users = {}; // apiKey -> user data
@@ -163,3 +163,4 @@ if (process.env.NODE_ENV !== 'production') {
 
 // Export the app for Vercel
 module.exports = app;
+

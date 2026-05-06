@@ -1,10 +1,16 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path'); // Added path module
 const app = express();
 
 app.use(cors());
 app.use(express.static('public'));
 app.use(express.json());
+
+// FIX: Explicitly serve the HTML file on the root route
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
 
 let users = {}; // apiKey -> user data
 
@@ -147,7 +153,13 @@ async function checkPaymentInEmail(email, appPassword, orderId) {
   });
 }
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`GMS FamPay API running on port ${PORT}`);
-});
+// FIX: Vercel serverless compatibility and local running
+if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`GMS FamPay API running on port ${PORT}`);
+  });
+}
+
+// Export the app for Vercel
+module.exports = app;

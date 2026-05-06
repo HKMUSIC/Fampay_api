@@ -153,14 +153,8 @@ async function checkPaymentInEmail(email, appPassword, orderId) {
   });
 }
 
-// FIX: Vercel serverless compatibility and local running
-if (process.env.NODE_ENV !== 'production') {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`GMS FamPay API running on port ${PORT}`);
-  });
-}
-
-// Export the app for Vercel
-module.exports = app;
-
+// FIX FOR HEROKU: Yeh server ko bina kisi condition ke lagatar chalne dega
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`GMS FamPay API running on port ${PORT}`);
+});
